@@ -22,13 +22,26 @@
  *    2,563 paragraphs and 447,514 characters; part 4 volume 9, the largest
  *    seen, is 2,603 paragraphs and 531,701 characters.
  *
- *  - **Volume order is the series page's order, not anything in a label.** The
- *    numeric ids don't rise with it (Monogatari's first three are 17860, 17874,
- *    17873), and the labels repeat: A Certain Magical Index lists its two
- *    short-story books as "Volume 1" and "Volume 2" between volumes 13 and 17.
- *    A number read from the label would file those as duplicates of the first
- *    two volumes. Position is the number, and a repeated label is told apart
- *    by its address ("SS Vol 1").
+ *  - **Volume order is the series page's order; a volume's number is its own.**
+ *    The numeric ids don't rise with the order (Monogatari's first three are
+ *    17860, 17874, 17873), so the list keeps the page's order. The number is
+ *    what a tracker hears when a volume is finished, and a tracker is never
+ *    moved back, so a number too high is never put right. Numbering by place
+ *    in the list was too high, in a sweep of every series page on 8 Oct 2026,
+ *    for every series that files an extra book or a half volume in the run.
+ *    So, in order (`numberVolumes`):
+ *    - A volume takes its own number, from its label ("Volume 7") or its
+ *      address ("…-vol-04-5" is 4.5; the label there says only "Volume 4").
+ *    - A book outside the numbered run is a side story: one with no number in
+ *      a numbered series (No Game No Life's "Practical War Game"), and one
+ *      whose number goes back to restart nothing (Index's two short-story
+ *      books, "Volume 1" and "Volume 2" between volumes 13 and 17). Its name
+ *      reads as a side story to the app ("Side story: " goes in front when
+ *      its own label doesn't), so it never moves the tracker.
+ *    - A run that starts again at 1 and carries on is a new part (Bookworm's
+ *      five, Classroom of the Elite's years). Its volumes count on from the
+ *      part before, the way a whole-series tracker counts them.
+ *    - A series with no volume numbers (Monogatari, Haruhi) goes by place.
  *
  *  - **The library is one page with every series on it, 1.8 MB.** There is no
  *    pager; the site sorts and filters it in the browser. It is fetched once
@@ -323,12 +336,7 @@ function comparable(text) {
  * Volume 1"; "Sword Art Online 1: Aincrad" reads "Volume 1: Aincrad".
  */
 function volumeLabel(name, series) {
-  var full = String(name || '').replace(/\s+/g, ' ').trim();
-  var prefix = comparable(series);
-  var rest = full;
-  if (prefix && comparable(full).indexOf(prefix) === 0) {
-    rest = full.slice(prefix.length).replace(/^[\s:,\-–—]+/, '').trim();
-  }
+  var rest = labelRest(name, series);
   // A volume named only by the series name says nothing; the caller names it
   // from its address instead.
   if (!rest) return '';
@@ -336,15 +344,262 @@ function volumeLabel(name, series) {
   return rest;
 }
 
-/** "a-certain-magical-index-ss-vol-1" under "a-certain-magical-index" → "SS Vol 1". */
+/**
+ * A label with the series name taken off the front, as written.
+ *
+ * Only when the name ends there: "Rascal Does Not Dream of Bunny Girl Senpai"
+ * under "Rascal Does Not Dream" is a title that runs on, and keeps every word.
+ * Grimgar's "level.1 Whisper, Chant, Prayer, Awaken" is a volume, and loses it.
+ */
+function labelRest(name, series) {
+  var full = String(name || '').replace(/\s+/g, ' ').trim();
+  var prefix = comparable(series);
+  if (!prefix || comparable(full).indexOf(prefix) !== 0) return full;
+  var after = full.slice(prefix.length);
+  // "… of Bunny Girl Senpai" runs on; "… vol 1" doesn't.
+  if (/^\s+(?!vol\b|volume\b)[a-z]+\s/.test(after)) return full;
+  return after.replace(/^[\s:,\-–—]+/, '').trim();
+}
+
+/**
+ * A label read off the address: "a-certain-magical-index-ss-vol-1" under
+ * "a-certain-magical-index" is "SS Volume 1", and "…-year-2-vol-04-5" is
+ * "Year 2 Volume 4.5". An address that doesn't open with the series' is read
+ * whole: Crest of the Stars lists its sequel as "banner-of-the-stars-volume-1".
+ */
 function labelFromSlug(path, seriesSlug) {
-  var slug = slugOf(path);
-  if (seriesSlug && slug === seriesSlug) return '';
-  if (seriesSlug && slug.indexOf(seriesSlug + '-') === 0) slug = slug.slice(seriesSlug.length + 1);
-  return slug.split('-').filter(Boolean).map(function (word) {
-    if (word.length <= 2 && /^[a-z]+$/.test(word)) return word.toUpperCase();
+  var rest = startsWithSeries(path, seriesSlug) ? slugRest(path, seriesSlug) : slugOf(path);
+  rest = rest.replace(/(^|-)(vol(?:ume)?-\d+)-(\d)(?=-|$)/, '$1$2.$3');
+  var words = rest.split('-').filter(Boolean);
+  return words.map(function (word, i) {
+    if (word === 'vol' || word === 'volume') return 'Volume';
+    if (/^\d/.test(word)) return word.replace(/^0+(?=\d)/, '');
+    // Small words stay small, except where a title or subtitle starts.
+    if (i > 0 && SMALL_WORDS.test(word) && !/^\d/.test(words[i - 1])) return word;
+    if (CAPITAL_WORDS.test(word)) return word.toUpperCase();
     return word.charAt(0).toUpperCase() + word.slice(1);
   }).join(' ');
+}
+
+var SMALL_WORDS = /^(?:a|an|and|as|at|by|for|in|of|on|or|the|to|with)$/;
+/** Abbreviations the site uses ("SS", "SP", "SH", "EX") and Roman numerals. */
+var CAPITAL_WORDS = /^(?:ss|sp|sh|ex|[ivx]{1,4})$/;
+
+/** Whether a book's address opens with the whole series address. */
+function startsWithSeries(path, seriesSlug) {
+  var slug = slugOf(path);
+  return !!seriesSlug && slug.indexOf(seriesSlug + '-') === 0;
+}
+
+/**
+ * The words of a book's address after the ones it shares with the series
+ * address. "a-certain-magical-index-ss-vol-1" under "a-certain-magical-index"
+ * is "ss-vol-1"; Bookworm's "ascendance-of-a-bookworm-part-1-…-volume-1" under
+ * "ascendance-of-a-bookworm-ill-do-anything-…" is "part-1-…-volume-1".
+ */
+function slugRest(path, seriesSlug) {
+  var words = slugOf(path).split('-').filter(Boolean);
+  var shared = String(seriesSlug || '').split('-').filter(Boolean);
+  var k = 0;
+  while (k < words.length && k < shared.length && words[k] === shared[k]) k++;
+  return words.slice(k).join('-');
+}
+
+// MARK: - Volume numbers
+
+/** "Volume 4.5", "Vol. 12" in a label. */
+var LABEL_VOLUME = /\bvol(?:ume)?\.?\s*(\d+(?:\.\d+)?)/i;
+/**
+ * "vol-12", "volume-08-5" in an address. A lone digit after the number is its
+ * decimal, almost always a half volume: the site's labels say "Volume 4" for
+ * both 4 and 4.5, and only the address tells them apart.
+ */
+var SLUG_VOLUME = /(?:^|-)vol(?:ume)?-0*(\d+)(?:-(\d))?(?=-|$)/;
+/**
+ * Words that mark a book as outside the numbered run: short-story and
+ * side-story collections and extras. Read only where the number can't settle
+ * it (see `numberVolumes`), since a volume in the run can be a story
+ * collection and still be counted (Spice and Wolf's "Side Colors"). "EX" only
+ * at the end ("Disc EX", "#EX"), so "Ex-Hero" isn't one.
+ */
+var SIDE_WORDS = /\b(?:short stor(?:y|ies)|side stor(?:y|ies)|gaiden|omake|extras?|bonus|anthology)\b|\bex\s*\d*$/i;
+/**
+ * "SS" for short stories, only as a word of the address ("…-ss-vol-1"). In a
+ * label it is as often a rank ("SSランク").
+ */
+var SLUG_SS = /(?:^|-)ss(?:-|$)/;
+/**
+ * Words that name a part of a longer series ("Part 2", "Year 3"): the only
+ * thing that says a "Volume 1" at the very end of a list starts a new part
+ * rather than being one more side book.
+ */
+var PART_WORDS = /\b(?:part|year|season|arc|book)\s*\d/i;
+
+/**
+ * A book's own volume number, or null.
+ *
+ * The label's "Volume N" first, made a half by the address ("Volume 4" at
+ * "…-vol-04-5" is 4.5); then the address; then a label that opens with its
+ * number ("Sword Art Online 1: Aincrad").
+ */
+function ownNumber(rest, slug) {
+  var fromSlug = SLUG_VOLUME.exec(slug);
+  var slugNumber = fromSlug ? parseFloat(fromSlug[1] + (fromSlug[2] ? '.' + fromSlug[2] : '')) : null;
+  var label = LABEL_VOLUME.exec(rest);
+  if (label) {
+    var n = parseFloat(label[1]);
+    return slugNumber !== null && Math.floor(slugNumber) === n ? slugNumber : n;
+  }
+  if (slugNumber !== null) return slugNumber;
+  var leading = /^(\d+(?:\.\d+)?)(?=\D|$)/.exec(rest);
+  return leading ? parseFloat(leading[1]) : null;
+}
+
+/**
+ * The facts `numberVolumes` decides on, for each volume once: its label, its
+ * own number, and whether its words mark it as a side book or a later part.
+ * A volume listed twice (the grid links some twice) is kept once.
+ */
+function booksOf(volumes, series, seriesSlug) {
+  var out = [];
+  var seen = {};
+  for (var i = 0; i < volumes.length; i++) {
+    var volume = volumes[i];
+    if (seen[volume.url]) continue;
+    seen[volume.url] = true;
+    var rest = labelRest(volume.name, series);
+    var slug = slugRest(volume.url, seriesSlug);
+    var words = rest + ' ' + slug.replace(/-/g, ' ');
+    var slugLabel = labelFromSlug(volume.url, seriesSlug);
+    // A book named only by the series takes its name from the address, but
+    // only an address that opens with the series' ("…-zero-second-journet"
+    // under "…-zero-second-journey" would read "Journet").
+    var label = volumeLabel(volume.name, series)
+      || (startsWithSeries(volume.url, seriesSlug) ? slugLabel : '')
+      || volume.name || ('Volume ' + (out.length + 1));
+    out.push({
+      url: volume.url,
+      label: label,
+      slugLabel: slugLabel,
+      number: ownNumber(rest, slug),
+      flagged: SIDE_WORDS.test(rest) || SIDE_WORDS.test(slug.replace(/-/g, ' ')) || SLUG_SS.test(slug),
+      // Already a side story to the app by its name, whatever its number.
+      named: readsAsSideStory(label),
+      // Named by the series alone.
+      bare: !rest,
+      partWords: PART_WORDS.test(words)
+    });
+  }
+  return out;
+}
+
+/**
+ * Each book's chapter number, whether it's a side story, and which part of
+ * the series it's in (0 for the first), in the page's order. `books` come
+ * from `booksOf`.
+ *
+ * See the header note for why. In short: the number is what a tracker hears,
+ * so it is the book's own, never its place, and a book outside the run gets
+ * none of the run's numbers. Side books are numbered 1, 2, 3 among
+ * themselves, so they keep the page's order after the main run.
+ */
+function numberVolumes(books) {
+  // A number far past what the page could hold is part of a title ("Another
+  // 2001", Adachi and Shimamura's "99.9"), not a volume.
+  var ceiling = Math.max(books.length * 3, books.length + 20);
+  books = books.map(function (book) {
+    if (book.named) return { number: null, flagged: true, partWords: false };
+    if (book.number === null || book.number <= ceiling) return book;
+    return { number: null, flagged: book.flagged, partWords: book.partWords };
+  });
+  // A first book named only by the series, with no number, is its first
+  // volume when the numbers after it start at 1 or 2: the site names a
+  // series' first book by the series alone ("Hello, I am a Witch…" then
+  // "Volume 2"). Before a "Volume 1" the two share the number.
+  var firstNumber = null;
+  for (var f = 0; f < books.length && firstNumber === null; f++) {
+    if (books[f].number !== null && !books[f].flagged) firstNumber = books[f].number;
+  }
+  if (books.length > 1 && books[0].bare && books[0].number === null && !books[0].flagged
+      && (firstNumber === 1 || firstNumber === 2)) {
+    books[0] = { number: 1, flagged: false, partWords: books[0].partWords };
+  }
+  var numbered = 0;
+  for (var i = 0; i < books.length; i++) if (books[i].number !== null) numbered++;
+  var out = [];
+  var sides = 0;
+  function side() { sides++; return { number: sides, side: true, part: 0 }; }
+
+  // Mostly unnumbered (Monogatari's arcs, Haruhi's books): by place.
+  if (numbered * 2 < books.length) {
+    var place = 0;
+    for (var p = 0; p < books.length; p++) {
+      out.push(books[p].flagged ? side() : { number: ++place, side: false, part: 0 });
+    }
+    return out;
+  }
+
+  // The next number after `from` that the run could hold.
+  function nextNumber(from) {
+    for (var j = from + 1; j < books.length; j++) {
+      if (books[j].number !== null && !books[j].flagged) return books[j].number;
+    }
+    return null;
+  }
+
+  var top = null;      // the highest own number in this part
+  var offset = 0;      // the whole volumes of every part before this one
+  var reached = 0;     // the highest number given so far
+  var part = 0;
+  for (var k = 0; k < books.length; k++) {
+    var n = books[k].number;
+    if (n === null) { out.push(side()); continue; }
+    // A short-story book counts only as the very next volume (Spice and
+    // Wolf's "Side Colors" is volume 11), never as one the run reaches later,
+    // and not at the head of the list when the run starts after it.
+    if (books[k].flagged) {
+      var after = nextNumber(k);
+      var ahead = top === null ? after !== null && after <= n : n > top + 1;
+      if (ahead) { out.push(side()); continue; }
+    }
+    // The same number again, unmarked, is the next piece of one volume
+    // ("Volume 4 Canto I", "Volume 4 Canto II"), so it isn't caught here.
+    if (top !== null && (n < top || (n === top && books[k].flagged))) {
+      // The number goes back. A run that starts again at 1 and carries on is
+      // a new part; anything else (a short-story book, a "Volume 0", a
+      // spin-off) sits outside the run.
+      var next = nextNumber(k);
+      var newPart = !books[k].flagged
+        && (next === null ? n === 1 && books[k].partWords : next > n && next <= top);
+      if (!newPart) { out.push(side()); continue; }
+      offset = Math.floor(reached);
+      top = null;
+      part++;
+    }
+    top = top === null ? n : Math.max(top, n);
+    reached = Math.max(reached, offset + n);
+    out.push({ number: offset + n, side: false, part: part });
+  }
+  return out;
+}
+
+/**
+ * A side book's name, worded so the app reads it as a side story: "side
+ * story", "gaiden" or "omake" anywhere, or "extra", "special" or "bonus" at
+ * the start. A label that already reads as one is kept; anything else gets
+ * "Side story: " in front.
+ */
+function sideStoryName(label) {
+  var named = String(label || '').replace(/^SS\b/, 'Short Stories').replace(/\bVol\b\.?/g, 'Volume');
+  return readsAsSideStory(named) ? named : 'Side story: ' + named;
+}
+
+function readsAsSideStory(name) {
+  var lower = String(name || '').toLowerCase();
+  if (/side[\s-]?stor(?:y|ies)|side chapter|gaiden|omake/.test(lower)) return true;
+  // "Extra", "Special" and "Bonus" count only at the start, before nothing, a
+  // number, punctuation or a word like "story".
+  return /^[^a-z0-9]*(?:extras?|specials?|bonus)(?:\s*$|\s*[^a-z\s]|\s+(?:chapter|ch\.|episode|ep|story|stories|part))/.test(lower);
 }
 
 /** The volumes from the series page's grid, in its order. */
@@ -534,7 +789,8 @@ var SourceBundle = {
 
   /**
    * Every volume of the series, in one request. See the header note: a volume
-   * is a chapter here, numbered by its place in the site's list.
+   * is a chapter here, numbered by its own volume number (`numberVolumes`),
+   * and a book outside the run is named as a side story.
    */
   getChapterList: function (url) {
     var path = seriesPath(url);
@@ -550,23 +806,31 @@ var SourceBundle = {
       throw new Error('This site changed how it lists volumes; this source needs updating.');
     }
 
+    var books = booksOf(volumes, series, slugOf(path));
+    var numbers = numberVolumes(books);
     var out = [];
-    var seen = {};
-    var labels = {};
-    var seriesSlug = slugOf(path);
-    for (var i = 0; i < volumes.length; i++) {
-      var volume = volumes[i];
-      if (seen[volume.url]) continue;
-      seen[volume.url] = true;
-
-      var label = volumeLabel(volume.name, series) || labelFromSlug(volume.url, seriesSlug)
-        || volume.name || ('Volume ' + (out.length + 1));
-      // Index lists its short-story books as "Volume 1" and "Volume 2" in the
-      // middle of the main run; the address is what tells them apart.
-      if (labels[label.toLowerCase()]) label = labelFromSlug(volume.url, seriesSlug) || label;
-      labels[label.toLowerCase()] = true;
-
-      out.push({ url: volume.url, name: label, chapterNumber: out.length + 1 });
+    var names = {};
+    for (var i = 0; i < books.length; i++) {
+      var book = books[i];
+      var label = book.label;
+      // "Volume 4" at "…-vol-04-5" is 4.5, and says so.
+      var says = /^Volume (\d+)$/.exec(label);
+      if (says && book.number !== null && parseFloat(says[1]) !== book.number) {
+        label = 'Volume ' + book.number;
+      }
+      // A label that is only "Volume N" says nothing more when the book is a
+      // side story or in a later part; the address says which ("SS Vol 1",
+      // "Year 2 Volume 1").
+      var plain = /^Volume [\d.]+$/.test(label);
+      if (plain && (numbers[i].side || numbers[i].part > 0 || names[label.toLowerCase()])) {
+        label = book.slugLabel || label;
+      }
+      var name = numbers[i].side ? sideStoryName(label) : label;
+      if (names[name.toLowerCase()] && book.slugLabel) {
+        name = numbers[i].side ? sideStoryName(book.slugLabel) : book.slugLabel;
+      }
+      names[name.toLowerCase()] = true;
+      out.push({ url: book.url, name: name, chapterNumber: numbers[i].number });
     }
     return out;
   },
